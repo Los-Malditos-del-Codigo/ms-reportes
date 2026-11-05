@@ -1,4 +1,4 @@
-package com.servillantas.reportes.domain;
+package com.servillantas.reportes.reporte.entity;
 
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;

@@ -1,5 +1,5 @@
-package com.servillantas.reportes.repository;
-import com.servillantas.reportes.domain.Reporte;
+package com.servillantas.reportes.reporte.repository;
+import com.servillantas.reportes.reporte.entity.Reporte;
 import org.springframework.data.domain.*;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.UUID;
