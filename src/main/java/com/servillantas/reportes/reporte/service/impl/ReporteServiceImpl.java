@@ -6,12 +6,14 @@ import com.servillantas.reportes.reporte.mapper.ReporteMapper;
 import com.servillantas.reportes.reporte.repository.ReporteRepository;
 import com.servillantas.reportes.reporte.service.ReporteService;
 import java.util.UUID;
+import java.util.Set;
 import org.springframework.data.domain.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 @Service public class ReporteServiceImpl implements ReporteService {
+    private static final Set<String> SORT_FIELDS = Set.of("createdAt", "tipo", "formato");
     private final ReporteRepository repository; private final ReporteMapper mapper;
     public ReporteServiceImpl(ReporteRepository repository, ReporteMapper mapper) {
         this.repository = repository; this.mapper = mapper;
@@ -26,6 +28,11 @@ import org.springframework.web.server.ResponseStatusException;
     }
     @Override @Transactional(readOnly = true)
     public Page<ReporteResponse> listar(UUID usuarioId, String tipo, Pageable pageable) {
+        pageable.getSort().forEach(order -> {
+            if (!SORT_FIELDS.contains(order.getProperty()))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Campo de ordenamiento inválido: " + order.getProperty());
+        });
         Pageable segura = PageRequest.of(Math.max(0, pageable.getPageNumber()),
                 Math.min(Math.max(1, pageable.getPageSize()), 100), pageable.getSort());
         Page<Reporte> values = tipo == null ? repository.findByUsuarioId(usuarioId, segura)
