@@ -1,27 +1,93 @@
 package com.servillantas.reportes.controller;
 
-import com.servillantas.reportes.domain.Reporte;
-import com.servillantas.reportes.repository.ReporteRepository;
+import com.servillantas.reportes.config.UsuarioActualProvider;
+import com.servillantas.reportes.dto.CrearReporteRequestDto;
+import com.servillantas.reportes.dto.PageResponseDto;
+import com.servillantas.reportes.dto.ReporteDto;
+import com.servillantas.reportes.service.ReportesService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.*;
-import org.springframework.data.domain.*;
-import org.springframework.data.web.PageableDefault;
-import org.springframework.http.*;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.server.ResponseStatusException;
-import java.util.*;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
-@RestController @RequestMapping("/api/v1/reportes")
+import java.net.URI;
+import java.util.UUID;
+
+@RestController
+@RequestMapping("/api/v1/reportes")
+@Tag(name = "Reportes", description = "Operaciones de generación y consulta de reportes")
 public class ReportesController {
-    private final ReporteRepository repository;
-    public ReportesController(ReporteRepository repository){this.repository=repository;}
-    public record CrearReporte(@NotBlank @Size(max=60) String tipo,@NotBlank @Pattern(regexp="(?i)PDF|XLSX") String formato,Map<String,Object> parametros,String archivoUrl){}
-    @PostMapping @ResponseStatus(HttpStatus.CREATED) public Reporte crear(@RequestHeader("X-User-Id") UUID usuarioId,@Valid @RequestBody CrearReporte r){if(r.parametros()!=null&&r.parametros().size()>50)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Demasiados parámetros");return repository.save(new Reporte(usuarioId,r.tipo().trim().toUpperCase(),r.formato().toUpperCase(),r.parametros(),normalizarUrl(r.archivoUrl())));}
-    @GetMapping public Page<Reporte> listar(@RequestHeader("X-User-Id") UUID usuarioId,@RequestParam(required=false) String tipo,@PageableDefault(sort="createdAt",direction=Sort.Direction.DESC) Pageable p){
-        Pageable segura=PageRequest.of(Math.max(0,p.getPageNumber()),Math.min(Math.max(1,p.getPageSize()),100),p.getSort());
-        if(tipo!=null)return repository.findByUsuarioIdAndTipoIgnoreCase(usuarioId,tipo,segura);
-        return repository.findByUsuarioId(usuarioId,segura);
+
+    private final ReportesService reportesService;
+    private final UsuarioActualProvider usuarioActualProvider;
+
+    public ReportesController(ReportesService reportesService, UsuarioActualProvider usuarioActualProvider) {
+        this.reportesService = reportesService;
+        this.usuarioActualProvider = usuarioActualProvider;
     }
-    @GetMapping("/{id}") public Reporte detalle(@PathVariable UUID id,@RequestHeader("X-User-Id") UUID usuarioId){Reporte r=repository.findById(id).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Reporte no encontrado"));if(r.usuarioId!=null&&!r.usuarioId.equals(usuarioId))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"El reporte pertenece a otro usuario");return r;}
-    private String normalizarUrl(String url){if(url==null||url.isBlank())return null;String limpia=url.trim();if(!(limpia.startsWith("https://")||limpia.startsWith("s3://")))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"archivo_url debe usar https:// o s3://");return limpia;}
+
+    @PostMapping
+    @Operation(summary = "Crear solicitud de reporte", description = "Registra una solicitud de reporte en formato PDF o XLSX.")
+    @ApiResponse(responseCode = "201", description = "Reporte creado exitosamente")
+    @ApiResponse(responseCode = "400", description = "Datos de entrada inválidos")
+    public ResponseEntity<ReporteDto> crear(
+            @Parameter(description = "Identificador del usuario autenticado (UUID)")
+            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader,
+            @Valid @RequestBody CrearReporteRequestDto request
+    ) {
+        UUID usuarioId = resolverUsuarioId(userIdHeader);
+        ReporteDto reporte = reportesService.crearReporte(usuarioId, request);
+
+        URI location = ServletUriComponentsBuilder.fromCurrentRequest()
+                .path("/{id}")
+                .buildAndExpand(reporte.id())
+                .toUri();
+
+        return ResponseEntity.created(location).body(reporte);
+    }
+
+    @GetMapping
+    @Operation(summary = "Listar reportes del usuario", description = "Devuelve los reportes paginados generados por el usuario autenticado.")
+    public ResponseEntity<PageResponseDto<ReporteDto>> listar(
+            @Parameter(description = "Identificador del usuario autenticado (UUID)")
+            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader,
+            @RequestParam(required = false) String tipo,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir
+    ) {
+        UUID usuarioId = resolverUsuarioId(userIdHeader);
+        PageResponseDto<ReporteDto> resultado = reportesService.listarReportes(usuarioId, tipo, page, size, sortBy, sortDir);
+        return ResponseEntity.ok(resultado);
+    }
+
+    @GetMapping("/{id}")
+    @Operation(summary = "Obtener detalle de reporte", description = "Recupera la información de un reporte específico verificando pertenencia.")
+    @ApiResponse(responseCode = "200", description = "Reporte encontrado")
+    @ApiResponse(responseCode = "403", description = "El reporte no pertenece al usuario")
+    @ApiResponse(responseCode = "404", description = "Reporte no encontrado")
+    public ResponseEntity<ReporteDto> detalle(
+            @PathVariable UUID id,
+            @Parameter(description = "Identificador del usuario autenticado (UUID)")
+            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader
+    ) {
+        UUID usuarioId = resolverUsuarioId(userIdHeader);
+        ReporteDto reporte = reportesService.obtenerReportePorId(id, usuarioId);
+        return ResponseEntity.ok(reporte);
+    }
+
+    private UUID resolverUsuarioId(String header) {
+        if (header != null && !header.isBlank()) {
+            try {
+                return UUID.fromString(header.trim());
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return usuarioActualProvider.getUsuarioId();
+    }
 }
